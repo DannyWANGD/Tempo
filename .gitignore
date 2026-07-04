@@ -33,3 +33,6 @@ Thumbs.db
 # Codex/local agent metadata
 .agents/
 .codex/
+
+# Local design notes
+设计方案.md
