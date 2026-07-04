@@ -9,6 +9,7 @@ release/
 # Local app data and generated verification files
 .tempo-user-data/
 .tempo-release-user-data/
+.electron-builder-cache/
 tempo-capture.png
 tempo-release-capture.png
 

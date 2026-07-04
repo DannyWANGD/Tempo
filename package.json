@@ -12,8 +12,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest run",
     "build": "npm run build:main && vite build",
-    "dist": "npm run build && electron-builder --win nsis",
+    "dist": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1",
     "dist:installer": "npm run dist",
+    "dist:installer:signed": "npm run dist",
     "dist:dir": "npm run build && electron-builder --win dir --config.win.signAndEditExecutable=false",
     "dist:release": "npm run dist:dir && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1"
   },

@@ -34,8 +34,8 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Build installer
-        run: npm run dist
+      - name: Build portable app
+        run: npm run dist:dir
 
       - name: Create portable zip
         shell: pwsh
@@ -43,18 +43,31 @@ jobs:
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           Compress-Archive -Path release/win-unpacked/* -DestinationPath "release/Tempo-$version-win-unpacked.zip" -Force
 
+      - name: Stage portable asset
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          Copy-Item -LiteralPath (Get-ChildItem release -Filter "Tempo-*-win-unpacked.zip").FullName -Destination release-assets
+
+      - name: Build installer
+        id: installer
+        continue-on-error: true
+        run: npm run dist
+
+      - name: Stage installer asset
+        if: steps.installer.outcome == 'success'
+        shell: pwsh
+        run: |
+          Copy-Item -LiteralPath (Get-ChildItem release -Filter "Tempo Setup *.exe").FullName -Destination release-assets
+
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
           name: tempo-windows
-          path: |
-            release/*.exe
-            release/*.zip
+          path: release-assets/*
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            release/*.exe
-            release/*.zip
+          files: release-assets/*
