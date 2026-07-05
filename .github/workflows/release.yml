@@ -55,10 +55,14 @@ jobs:
         run: npm run dist
 
       - name: Stage installer asset
-        if: steps.installer.outcome == 'success'
+        if: always()
         shell: pwsh
         run: |
-          Copy-Item -LiteralPath (Get-ChildItem release -Filter "Tempo Setup *.exe").FullName -Destination release-assets
+          $installer = Get-ChildItem release -Filter "Tempo Setup *.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $installer) {
+            throw "Missing Windows installer output."
+          }
+          Copy-Item -LiteralPath $installer.FullName -Destination release-assets
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
