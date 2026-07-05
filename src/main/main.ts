@@ -17,10 +17,13 @@ import {
   SCHEMA_VERSION,
   type AppData,
   type AccentColor,
+  type DayJournal,
   type ExportedData,
+  type InboxItem,
   type Preferences,
   type Session,
-  type SessionRange
+  type SessionRange,
+  type Task
 } from "../shared/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -30,6 +33,7 @@ let mainWindow: BrowserWindow | null = null;
 
 const capturePath = process.env.TEMPO_CAPTURE_PATH;
 const captureDelayMs = Number(process.env.TEMPO_CAPTURE_DELAY_MS ?? 800);
+const captureAction = process.env.TEMPO_CAPTURE_ACTION;
 const userDataDir = process.env.TEMPO_USER_DATA_DIR;
 const debugRenderer = process.env.TEMPO_DEBUG_RENDERER === "1";
 
@@ -123,25 +127,123 @@ function clampCycles(value: unknown, fallback: number): number {
     : fallback;
 }
 
+function normalizeSortOrder(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.max(0, Math.round(value));
+}
+
+function compareTasks(a: Task, b: Task): number {
+  if (a.date !== b.date) return a.date.localeCompare(b.date);
+  const aOrder = a.sortOrder ?? Number.MAX_SAFE_INTEGER;
+  const bOrder = b.sortOrder ?? Number.MAX_SAFE_INTEGER;
+  if (aOrder !== bOrder) return aOrder - bOrder;
+  return a.createdAt.localeCompare(b.createdAt);
+}
+
 function normalizeSessions(value: unknown): Session[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((session): session is Session => {
-    return (
-      typeof session === "object" &&
-      session !== null &&
-      typeof session.id === "string" &&
-      ["focus", "shortBreak", "longBreak"].includes(String(session.type)) &&
-      typeof session.startedAt === "string" &&
-      typeof session.endedAt === "string" &&
-      typeof session.plannedMinutes === "number" &&
-      typeof session.actualMinutes === "number" &&
-      typeof session.cycleIndex === "number" &&
-      typeof session.cycleTotal === "number" &&
-      ["completed", "interrupted"].includes(String(session.status)) &&
-      typeof session.interrupted === "boolean" &&
-      typeof session.note === "string"
-    );
-  });
+  return value
+    .filter((session): session is Session => {
+      return (
+        typeof session === "object" &&
+        session !== null &&
+        typeof session.id === "string" &&
+        ["focus", "shortBreak", "longBreak"].includes(String(session.type)) &&
+        typeof session.startedAt === "string" &&
+        typeof session.endedAt === "string" &&
+        typeof session.plannedMinutes === "number" &&
+        typeof session.actualMinutes === "number" &&
+        typeof session.cycleIndex === "number" &&
+        typeof session.cycleTotal === "number" &&
+        ["completed", "interrupted"].includes(String(session.status)) &&
+        typeof session.interrupted === "boolean" &&
+        typeof session.note === "string"
+      );
+    })
+    .map((session) => ({
+      ...session,
+      taskId: typeof session.taskId === "string" ? session.taskId : undefined,
+      tag: typeof session.tag === "string" ? session.tag : undefined
+    }));
+}
+
+function normalizeTasks(value: unknown): Task[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((task): task is Task => {
+      return (
+        typeof task === "object" &&
+        task !== null &&
+        typeof task.id === "string" &&
+        typeof task.title === "string" &&
+        typeof task.date === "string" &&
+        ["open", "done", "archived"].includes(String(task.status)) &&
+        Array.isArray(task.completedSessionIds) &&
+        typeof task.createdAt === "string" &&
+        typeof task.updatedAt === "string"
+      );
+    })
+    .map((task) => ({
+      ...task,
+      title: task.title.trim(),
+      tag: typeof task.tag === "string" && task.tag.trim() ? task.tag.trim() : undefined,
+      plannedSessions:
+        typeof task.plannedSessions === "number" && Number.isFinite(task.plannedSessions)
+          ? Math.max(0, Math.round(task.plannedSessions))
+          : undefined,
+      sortOrder: normalizeSortOrder(task.sortOrder),
+      completedSessionIds: task.completedSessionIds.filter((id): id is string => typeof id === "string")
+    }))
+    .filter((task) => task.title.length > 0)
+    .sort(compareTasks);
+}
+
+function normalizeDayJournals(value: unknown): DayJournal[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((journal): journal is DayJournal => {
+      return (
+        typeof journal === "object" &&
+        journal !== null &&
+        typeof journal.date === "string" &&
+        (typeof journal.closedAt === "string" || journal.closedAt === null) &&
+        typeof journal.summary === "string" &&
+        typeof journal.blockerNote === "string" &&
+        typeof journal.tomorrowNote === "string" &&
+        Array.isArray(journal.completedTaskIds) &&
+        Array.isArray(journal.carriedTaskIds)
+      );
+    })
+    .map((journal) => ({
+      ...journal,
+      summary: journal.summary.trim(),
+      blockerNote: journal.blockerNote.trim(),
+      tomorrowNote: journal.tomorrowNote.trim(),
+      improvementNote:
+        typeof journal.improvementNote === "string" ? journal.improvementNote.trim() : "",
+      completedTaskIds: journal.completedTaskIds.filter((id): id is string => typeof id === "string"),
+      carriedTaskIds: journal.carriedTaskIds.filter((id): id is string => typeof id === "string")
+    }));
+}
+
+function normalizeInboxItems(value: unknown): InboxItem[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is InboxItem => {
+      return (
+        typeof item === "object" &&
+        item !== null &&
+        typeof item.id === "string" &&
+        typeof item.text === "string" &&
+        typeof item.createdAt === "string" &&
+        typeof item.updatedAt === "string"
+      );
+    })
+    .map((item) => ({
+      ...item,
+      text: item.text.trim()
+    }))
+    .filter((item) => item.text.length > 0);
 }
 
 async function loadAppData(): Promise<AppData> {
@@ -150,11 +252,17 @@ async function loadAppData(): Promise<AppData> {
     await readJsonFile<Partial<Preferences>>("preferences.json", DEFAULT_PREFERENCES)
   );
   const sessions = normalizeSessions(await readJsonFile<Session[]>("sessions.json", []));
+  const tasks = normalizeTasks(await readJsonFile<Task[]>("tasks.json", []));
+  const dayJournals = normalizeDayJournals(await readJsonFile<DayJournal[]>("dayJournals.json", []));
+  const inboxItems = normalizeInboxItems(await readJsonFile<InboxItem[]>("inbox.json", []));
   const daySummaries = buildDaySummaries(sessions);
   return {
     schemaVersion: SCHEMA_VERSION,
     preferences,
     sessions,
+    tasks,
+    dayJournals,
+    inboxItems,
     daySummaries
   };
 }
@@ -162,15 +270,24 @@ async function loadAppData(): Promise<AppData> {
 async function persistAppData(data: AppData): Promise<AppData> {
   const preferences = normalizePreferences(data.preferences);
   const sessions = normalizeSessions(data.sessions);
+  const tasks = normalizeTasks(data.tasks);
+  const dayJournals = normalizeDayJournals(data.dayJournals);
+  const inboxItems = normalizeInboxItems(data.inboxItems);
   const daySummaries = buildDaySummaries(sessions);
   await writeJsonFile("preferences.json", preferences);
   await writeJsonFile("sessions.json", sessions);
+  await writeJsonFile("tasks.json", tasks);
+  await writeJsonFile("dayJournals.json", dayJournals);
+  await writeJsonFile("inbox.json", inboxItems);
   await writeJsonFile("daySummaries.json", daySummaries);
   await writeJsonFile("appState.json", { schemaVersion: SCHEMA_VERSION, updatedAt: new Date().toISOString() });
   return {
     schemaVersion: SCHEMA_VERSION,
     preferences,
     sessions,
+    tasks,
+    dayJournals,
+    inboxItems,
     daySummaries
   };
 }
@@ -212,7 +329,7 @@ async function createWindow(): Promise<void> {
 
   if (process.env.VITE_DEV_SERVER_URL) {
     await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
-    if (!capturePath) {
+    if (!capturePath && process.env.TEMPO_OPEN_DEVTOOLS === "1") {
       mainWindow.webContents.openDevTools({ mode: "detach" });
     }
   } else {
@@ -221,6 +338,57 @@ async function createWindow(): Promise<void> {
   }
 
   if (capturePath) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    if (captureAction === "start-focus") {
+      await mainWindow.webContents.executeJavaScript("document.querySelector('.timer-controls .primary-button')?.click()");
+    } else if (captureAction === "review") {
+      await mainWindow.webContents.executeJavaScript("document.querySelectorAll('.nav button')[1]?.click()");
+    } else if (captureAction === "review-edit-end-day") {
+      await mainWindow.webContents.executeJavaScript(`
+        new Promise((resolve) => {
+          document.querySelectorAll('.nav button')[1]?.click();
+          setTimeout(() => {
+            document.querySelector('.weekly-review')?.scrollIntoView({ block: 'start' });
+            document.querySelector('.weekly-review-day.selected .weekly-review-edit')?.click();
+            resolve(true);
+          }, 420);
+        })
+      `);
+    } else if (captureAction === "end-day") {
+      await mainWindow.webContents.executeJavaScript(`
+        new Promise((resolve) => {
+          Array.from(document.querySelectorAll('.timer-controls button')).find((button) => button.textContent?.trim() === 'End Day')?.click();
+          setTimeout(() => {
+            if (!document.querySelector('.end-day-panel')) {
+              document.querySelector('.end-day-strip button')?.click();
+            }
+            setTimeout(() => {
+            document.querySelector('.end-day-panel')?.scrollIntoView({ block: 'center' });
+            resolve(true);
+            }, 180);
+          }, 240);
+        })
+      `);
+    } else if (captureAction === "task-edit") {
+      await mainWindow.webContents.executeJavaScript(`
+        Array.from(document.querySelectorAll('.task-actions button')).find((button) => button.textContent?.trim() === 'Edit')?.click();
+      `);
+    } else if (captureAction === "scroll-insights") {
+      await mainWindow.webContents.executeJavaScript(
+        "document.querySelector('.today-insights-row')?.scrollIntoView({ block: 'center' })"
+      );
+    } else if (captureAction === "add-inbox") {
+      await mainWindow.webContents.executeJavaScript(`
+        const textarea = document.querySelector('.inbox-entry textarea');
+        const button = document.querySelector('.inbox-entry button');
+        if (textarea && button) {
+          const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+          setter?.call(textarea, 'Runtime inbox capture test');
+          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          button.click();
+        }
+      `);
+    }
     await new Promise((resolve) => setTimeout(resolve, Number.isFinite(captureDelayMs) ? captureDelayMs : 800));
     const image = await mainWindow.webContents.capturePage();
     await fs.writeFile(capturePath, image.toPNG());
@@ -247,6 +415,53 @@ ipcMain.handle("sessions:update", async (_event, session: Session) => {
   const current = await loadAppData();
   const sessions = current.sessions.map((item) => (item.id === session.id ? session : item));
   return persistAppData({ ...current, sessions });
+});
+
+ipcMain.handle("tasks:save", async (_event, task: Task) => {
+  const current = await loadAppData();
+  const tasks = [...current.tasks.filter((item) => item.id !== task.id), task].sort(compareTasks);
+  return persistAppData({ ...current, tasks });
+});
+
+ipcMain.handle("tasks:delete", async (_event, taskId: string) => {
+  const current = await loadAppData();
+  const tasks = current.tasks.filter((task) => task.id !== taskId);
+  const sessions = current.sessions.map((session) =>
+    session.taskId === taskId ? { ...session, taskId: undefined } : session
+  );
+  const dayJournals = current.dayJournals.map((journal) => ({
+    ...journal,
+    completedTaskIds: journal.completedTaskIds.filter((id) => id !== taskId),
+    carriedTaskIds: journal.carriedTaskIds.filter((id) => id !== taskId)
+  }));
+  return persistAppData({ ...current, sessions, tasks, dayJournals });
+});
+
+ipcMain.handle("day-journals:save", async (_event, journal: DayJournal) => {
+  const current = await loadAppData();
+  const dayJournals = [...current.dayJournals.filter((item) => item.date !== journal.date), journal].sort((a, b) =>
+    a.date.localeCompare(b.date)
+  );
+  return persistAppData({ ...current, dayJournals });
+});
+
+ipcMain.handle("inbox:save", async (_event, item: InboxItem) => {
+  const current = await loadAppData();
+  const inboxItems = [...current.inboxItems.filter((entry) => entry.id !== item.id), item].sort((a, b) =>
+    a.createdAt.localeCompare(b.createdAt)
+  );
+  return persistAppData({ ...current, inboxItems });
+});
+
+ipcMain.handle("inbox:delete", async (_event, itemId: string) => {
+  const current = await loadAppData();
+  const inboxItems = current.inboxItems.filter((item) => item.id !== itemId);
+  return persistAppData({ ...current, inboxItems });
+});
+
+ipcMain.handle("window:focus-fullscreen", async (_event, enabled: boolean) => {
+  if (!mainWindow) return;
+  mainWindow.setFullScreen(Boolean(enabled));
 });
 
 ipcMain.handle("sessions:load", async (_event, range?: SessionRange) => {
@@ -319,6 +534,9 @@ ipcMain.handle("data:import", async () => {
     schemaVersion: SCHEMA_VERSION,
     preferences: normalizePreferences(parsed.preferences),
     sessions: normalizeSessions(parsed.sessions),
+    tasks: normalizeTasks(parsed.tasks),
+    dayJournals: normalizeDayJournals(parsed.dayJournals),
+    inboxItems: normalizeInboxItems(parsed.inboxItems),
     daySummaries: []
   });
 
@@ -332,7 +550,7 @@ ipcMain.handle("data:reset", async () => {
     defaultId: 1,
     cancelId: 1,
     title: "Reset Tempo",
-    message: "Delete local Tempo sessions and restore default settings?"
+    message: "Delete local Tempo sessions, tasks, day summaries, and restore default settings?"
   });
 
   if (confirmation.response !== 0) {
@@ -343,6 +561,9 @@ ipcMain.handle("data:reset", async () => {
     schemaVersion: SCHEMA_VERSION,
     preferences: DEFAULT_PREFERENCES,
     sessions: [],
+    tasks: [],
+    dayJournals: [],
+    inboxItems: [],
     daySummaries: []
   });
 });

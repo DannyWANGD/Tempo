@@ -4,6 +4,7 @@ export type SegmentType = "focus" | "shortBreak" | "longBreak";
 export type SessionStatus = "completed" | "interrupted";
 export type TimerStatus = "idle" | "running" | "paused";
 export type AccentColor = "sage" | "blue" | "rose";
+export type TaskStatus = "open" | "done" | "archived";
 
 export interface Preferences {
   focusLength: number;
@@ -29,6 +30,39 @@ export interface Session {
   status: SessionStatus;
   interrupted: boolean;
   note: string;
+  taskId?: string;
+  tag?: string;
+}
+
+export interface Task {
+  id: string;
+  title: string;
+  date: string;
+  status: TaskStatus;
+  tag?: string;
+  plannedSessions?: number;
+  sortOrder?: number;
+  completedSessionIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DayJournal {
+  date: string;
+  closedAt: string | null;
+  summary: string;
+  blockerNote: string;
+  tomorrowNote: string;
+  improvementNote: string;
+  completedTaskIds: string[];
+  carriedTaskIds: string[];
+}
+
+export interface InboxItem {
+  id: string;
+  text: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface DaySummary {
@@ -45,6 +79,9 @@ export interface AppData {
   schemaVersion: typeof SCHEMA_VERSION;
   preferences: Preferences;
   sessions: Session[];
+  tasks: Task[];
+  dayJournals: DayJournal[];
+  inboxItems: InboxItem[];
   daySummaries: DaySummary[];
 }
 
@@ -76,10 +113,16 @@ export interface TempoApi {
   savePreferences: (preferences: Preferences) => Promise<AppData>;
   saveSession: (session: Session) => Promise<AppData>;
   updateSession: (session: Session) => Promise<AppData>;
+  saveTask: (task: Task) => Promise<AppData>;
+  deleteTask: (taskId: string) => Promise<AppData>;
+  saveDayJournal: (journal: DayJournal) => Promise<AppData>;
+  saveInboxItem: (item: InboxItem) => Promise<AppData>;
+  deleteInboxItem: (itemId: string) => Promise<AppData>;
   loadSessions: (range?: SessionRange) => Promise<Session[]>;
   exportData: () => Promise<FileActionResult>;
   importData: () => Promise<ImportResult>;
   resetLocalData: () => Promise<AppData>;
+  setFocusFullscreen: (enabled: boolean) => Promise<void>;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {

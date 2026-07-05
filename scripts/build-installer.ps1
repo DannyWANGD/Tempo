@@ -5,6 +5,7 @@ $cacheDir = Join-Path $root ".electron-builder-cache"
 New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
 
 $env:ELECTRON_BUILDER_CACHE = $cacheDir
+$env:CSC_IDENTITY_AUTO_DISCOVERY = "false"
 
 function Invoke-Native {
   param(
@@ -23,7 +24,7 @@ function Invoke-Native {
 Push-Location $root
 try {
   Invoke-Native npm run build
-  Invoke-Native npx electron-builder --win nsis
+  Invoke-Native npx electron-builder --win nsis --config.win.signAndEditExecutable=false
 }
 finally {
   Pop-Location
